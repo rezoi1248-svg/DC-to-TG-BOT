@@ -31,8 +31,9 @@ class DiscordTelegramReposter:
         
         # Initialize Discord bot with required intents
         intents = discord.Intents.default()
-        intents.message_content = True
-        intents.attachments = True
+        intents.message_content = True  # Required to read message content
+        # Note: There's NO 'attachments' intent - attachments are automatically 
+        # included when message_content intent is enabled
         
         self.discord_client = discord.Client(intents=intents)
         
@@ -59,7 +60,7 @@ class DiscordTelegramReposter:
         if channel:
             logger.info(f"📢 Monitoring: #{channel.name} in {channel.guild.name}")
         else:
-            logger.error(f"❌ Channel {Config.DISCORD_CHANNEL_ID} not found!")
+            logger.error(f"❌ Channel {Config.DISCORD_CHANNEL_ID} not found! Make sure the bot has access to this channel.")
     
     async def download_file(self, url: str) -> Optional[BytesIO]:
         """Download file from URL"""
@@ -68,10 +69,14 @@ class DiscordTelegramReposter:
                 if response.status == 200:
                     data = await response.read()
                     if len(data) <= Config.MAX_FILE_SIZE:
+                        logger.info(f"✅ Downloaded file: {len(data)} bytes")
                         return BytesIO(data)
                     else:
-                        logger.warning(f"File too large: {len(data)} bytes")
+                        logger.warning(f"File too large: {len(data)} bytes (max: {Config.MAX_FILE_SIZE})")
                         return None
+                else:
+                    logger.warning(f"Failed to download file, HTTP {response.status}")
+                    return None
         except Exception as e:
             logger.error(f"Failed to download file: {e}")
             return None
@@ -81,6 +86,9 @@ class DiscordTelegramReposter:
         """Send message or file to Telegram channel"""
         try:
             if file_data:
+                # Reset file pointer to beginning
+                file_data.seek(0)
+                
                 if is_image:
                     # Send as photo
                     await self.telegram_bot.send_photo(
@@ -90,6 +98,7 @@ class DiscordTelegramReposter:
                         read_timeout=30,
                         write_timeout=30
                     )
+                    logger.info(f"✅ Image sent to Telegram: {filename}")
                 else:
                     # Send as document
                     await self.telegram_bot.send_document(
@@ -100,6 +109,7 @@ class DiscordTelegramReposter:
                         read_timeout=30,
                         write_timeout=30
                     )
+                    logger.info(f"✅ File sent to Telegram: {filename}")
             else:
                 # Send text only, split if too long
                 if len(content) > 4096:
@@ -109,14 +119,15 @@ class DiscordTelegramReposter:
                             text=content[i:i+4096],
                             read_timeout=30
                         )
+                    logger.info(f"✅ Long message sent to Telegram ({len(content)} chars)")
                 else:
                     await self.telegram_bot.send_message(
                         chat_id=Config.TELEGRAM_CHANNEL_ID,
                         text=content,
                         read_timeout=30
                     )
+                    logger.info(f"✅ Message sent to Telegram")
             
-            logger.info(f"✅ Message sent to Telegram")
             return True
             
         except TelegramError as e:
@@ -131,15 +142,21 @@ class DiscordTelegramReposter:
         results = []
         
         for attachment in attachments:
-            logger.info(f"📎 Processing attachment: {attachment.filename}")
+            logger.info(f"📎 Processing attachment: {attachment.filename} ({attachment.size} bytes)")
             
             # Download file
             file_data = await self.download_file(attachment.url)
             if not file_data:
                 continue
             
-            # Check if it's an image
-            is_image = attachment.content_type and attachment.content_type.startswith('image/')
+            # Check if it's an image (by content type or extension)
+            is_image = False
+            if attachment.content_type:
+                is_image = attachment.content_type.startswith('image/')
+            else:
+                # Check by extension
+                image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']
+                is_image = any(attachment.filename.lower().endswith(ext) for ext in image_extensions)
             
             results.append({
                 'data': file_data,
@@ -156,14 +173,14 @@ class DiscordTelegramReposter:
         # Author info
         author_name = message.author.display_name
         if message.author.bot:
-            author_name += " [BOT]"
+            author_name += " 🤖"
         
-        parts.append(f"**{author_name}**")
+        parts.append(f"**👤 {author_name}**")
         parts.append(f"📅 {message.created_at.strftime('%Y-%m-%d %H:%M:%S')}")
         
         # Message content
         if message.content:
-            parts.append(f"\n{message.content}")
+            parts.append(f"\n💬 {message.content}")
         
         # Reply reference
         if message.reference and message.reference.resolved:
@@ -171,25 +188,35 @@ class DiscordTelegramReposter:
             parts.append(f"\n↪️ **Replying to:** {replied_msg.author.display_name}")
             if replied_msg.content:
                 preview = replied_msg.content[:100] + "..." if len(replied_msg.content) > 100 else replied_msg.content
-                parts.append(f"   {preview}")
+                parts.append(f"   💭 {preview}")
         
         # Embeds
         if message.embeds:
-            for embed in message.embeds:
-                parts.append(f"\n📦 **Embed:**")
+            for i, embed in enumerate(message.embeds):
+                parts.append(f"\n📦 **Embed {i+1}:**")
                 if embed.title:
                     parts.append(f"**{embed.title}**")
                 if embed.description:
-                    parts.append(embed.description)
+                    parts.append(embed.description[:500])  # Limit embed description
                 if embed.url:
                     parts.append(f"🔗 {embed.url}")
+                if embed.footer:
+                    parts.append(f"📝 {embed.footer.text}")
         
         # Stickers
         if message.stickers:
-            parts.append(f"\n🎨 **Stickers:** {', '.join([s.name for s in message.stickers])}")
+            sticker_names = [f"🎨 {s.name}" for s in message.stickers]
+            parts.append(f"\n{', '.join(sticker_names)}")
         
         # Join with newlines
-        return "\n".join(parts)
+        result = "\n".join(parts)
+        
+        # Add source footer (if there's room)
+        footer = f"\n\n---\n🔄 Reposted from Discord | #{message.channel.name}"
+        if len(result + footer) < 4096:
+            result += footer
+        
+        return result
     
     async def on_discord_message(self, message: discord.Message):
         """Handle Discord messages and repost to Telegram"""
@@ -202,37 +229,35 @@ class DiscordTelegramReposter:
         if message.channel.id != Config.DISCORD_CHANNEL_ID:
             return
         
-        logger.info(f"📨 New message from {message.author} in #{message.channel.name}")
+        logger.info(f"📨 New message from {message.author.display_name} in #{message.channel.name}")
         
         try:
             # Format message content
             formatted_content = await self.format_discord_message(message)
-            
-            # Add source footer
-            footer = f"\n\n---\n🔄 Reposted from Discord | #{message.channel.name}"
-            if len(formatted_content + footer) < 4096:
-                formatted_content += footer
             
             # Process attachments
             attachments_data = await self.process_attachments(message.attachments)
             
             # Send to Telegram
             if attachments_data:
-                # Send text first if present
-                if formatted_content:
+                # Send text first if present and not empty
+                if formatted_content and formatted_content.strip():
                     await self.send_to_telegram(formatted_content)
                 
                 # Send each attachment
                 for attachment in attachments_data:
                     await self.send_to_telegram(
-                        content=f"📎 {attachment['filename']}",
+                        content=f"📎 **{attachment['filename']}**",
                         file_data=attachment['data'],
                         filename=attachment['filename'],
                         is_image=attachment['is_image']
                     )
             else:
-                # Send only text
-                await self.send_to_telegram(formatted_content)
+                # Send only text if present
+                if formatted_content and formatted_content.strip():
+                    await self.send_to_telegram(formatted_content)
+                else:
+                    logger.warning("Empty message, nothing to send")
                 
         except Exception as e:
             logger.error(f"❌ Failed to process message: {e}")
@@ -244,12 +269,15 @@ class DiscordTelegramReposter:
             await asyncio.sleep(300)  # Every 5 minutes
             try:
                 # Check Discord connection
-                if not self.discord_client.is_closed():
+                if self.discord_client and not self.discord_client.is_closed():
                     logger.debug("✅ Discord connection OK")
+                else:
+                    logger.warning("⚠️ Discord connection issue")
                 
                 # Check Telegram connection
-                await self.telegram_bot.get_me()
-                logger.debug("✅ Telegram connection OK")
+                if self.telegram_bot:
+                    await self.telegram_bot.get_me()
+                    logger.debug("✅ Telegram connection OK")
                 
             except Exception as e:
                 logger.error(f"⚠️ Health check failed: {e}")
