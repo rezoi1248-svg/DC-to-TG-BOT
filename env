@@ -1,0 +1,18 @@
+# Discord Bot Token
+DISCORD_TOKEN=YOUR_DISCORD_BOT_TOKEN_HERE
+
+# Discord Channel ID (where bot will listen)
+DISCORD_CHANNEL_ID=123456789012345678
+
+# Telegram Bot Token (get from @BotFather)
+TELEGRAM_TOKEN=YOUR_TELEGRAM_BOT_TOKEN_HERE
+
+# Telegram Channel ID (where bot will post)
+# Use @username or numeric ID (with -100 prefix for channels)
+TELEGRAM_CHANNEL_ID=-1001234567890123
+
+# Optional: Logging level (DEBUG, INFO, WARNING, ERROR)
+LOG_LEVEL=INFO
+
+# Optional: Maximum file size in MB
+MAX_FILE_SIZE=20
