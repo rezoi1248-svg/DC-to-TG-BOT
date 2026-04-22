@@ -6,7 +6,8 @@ import aiohttp
 from io import BytesIO
 import traceback
 import re
-from typing import Optional  # ← This was missing!
+from typing import Optional
+import mimetypes
 
 from config import Config
 from logger import setup_logger
@@ -15,7 +16,7 @@ from logger import setup_logger
 logger = setup_logger("DiscordTelegramBot", Config.LOG_LEVEL)
 
 class DiscordTelegramReposter:
-    """Advanced Discord to Telegram reposter bot - Clean Version"""
+    """Advanced Discord to Telegram reposter bot - Full File Support"""
     
     def __init__(self):
         self.discord_client = None
@@ -61,47 +62,128 @@ class DiscordTelegramReposter:
         else:
             logger.error(f"❌ Channel {Config.DISCORD_CHANNEL_ID} not found!")
     
-    async def download_image(self, url: str) -> Optional[BytesIO]:
-        """Download image from URL"""
+    async def download_file(self, url: str) -> Optional[BytesIO]:
+        """Download any file from URL"""
         try:
             async with self.session.get(url) as response:
                 if response.status == 200:
                     data = await response.read()
                     if len(data) <= Config.MAX_FILE_SIZE:
-                        logger.info(f"✅ Downloaded image: {len(data)} bytes")
+                        logger.info(f"✅ Downloaded file: {len(data)} bytes")
                         return BytesIO(data)
                     else:
-                        logger.warning(f"Image too large: {len(data)} bytes")
+                        logger.warning(f"File too large: {len(data)} bytes (Max: {Config.MAX_FILE_SIZE})")
                         return None
                 else:
-                    logger.warning(f"Failed to download image, HTTP {response.status}")
+                    logger.warning(f"Failed to download file, HTTP {response.status}")
                     return None
         except Exception as e:
-            logger.error(f"Failed to download image: {e}")
+            logger.error(f"Failed to download file: {e}")
             return None
     
-    async def send_image_to_telegram(self, image_data: BytesIO, caption: str = None):
-        """Send image to Telegram with caption"""
+    def get_file_type(self, filename: str, content_type: str = None) -> str:
+        """Determine file type for better handling"""
+        filename_lower = filename.lower()
+        
+        # Video files
+        video_extensions = ['.mp4', '.avi', '.mov', '.mkv', '.wmv', '.flv', '.webm', '.m4v', '.3gp']
+        if any(filename_lower.endswith(ext) for ext in video_extensions):
+            return 'video'
+        
+        # Audio files
+        audio_extensions = ['.mp3', '.wav', '.ogg', '.m4a', '.flac', '.aac', '.wma']
+        if any(filename_lower.endswith(ext) for ext in audio_extensions):
+            return 'audio'
+        
+        # Image files
+        image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.ico', '.svg']
+        if any(filename_lower.endswith(ext) for ext in image_extensions):
+            return 'image'
+        
+        # Document files
+        document_extensions = ['.pdf', '.doc', '.docx', '.txt', '.rtf', '.odt']
+        if any(filename_lower.endswith(ext) for ext in document_extensions):
+            return 'document'
+        
+        # Archive files
+        archive_extensions = ['.zip', '.rar', '.7z', '.tar', '.gz', '.bz2']
+        if any(filename_lower.endswith(ext) for ext in archive_extensions):
+            return 'archive'
+        
+        # Executable files
+        executable_extensions = ['.exe', '.msi', '.bat', '.sh', '.app', '.deb', '.rpm']
+        if any(filename_lower.endswith(ext) for ext in executable_extensions):
+            return 'executable'
+        
+        # APK files
+        if filename_lower.endswith('.apk'):
+            return 'apk'
+        
+        # Default
+        return 'other'
+    
+    async def send_file_to_telegram(self, file_data: BytesIO, filename: str, 
+                                   content_type: str = None, caption: str = None):
+        """Send any file to Telegram with appropriate method"""
         try:
             # Reset file pointer to beginning
-            image_data.seek(0)
+            file_data.seek(0)
             
-            # Send photo with caption (if any)
-            await self.telegram_bot.send_photo(
-                chat_id=Config.TELEGRAM_CHANNEL_ID,
-                photo=image_data,
-                caption=caption[:1024] if caption else None,  # Telegram caption limit
-                read_timeout=30,
-                write_timeout=30
-            )
-            logger.info(f"✅ Image sent to Telegram with caption: {caption[:50] if caption else 'No caption'}")
+            file_type = self.get_file_type(filename, content_type)
+            logger.info(f"📤 Sending {file_type} file: {filename}")
+            
+            # For videos - use send_video
+            if file_type == 'video':
+                await self.telegram_bot.send_video(
+                    chat_id=Config.TELEGRAM_CHANNEL_ID,
+                    video=file_data,
+                    caption=caption[:1024] if caption else None,
+                    filename=filename,
+                    supports_streaming=True,
+                    read_timeout=60,
+                    write_timeout=60
+                )
+            
+            # For audio - use send_audio
+            elif file_type == 'audio':
+                await self.telegram_bot.send_audio(
+                    chat_id=Config.TELEGRAM_CHANNEL_ID,
+                    audio=file_data,
+                    caption=caption[:1024] if caption else None,
+                    filename=filename,
+                    read_timeout=60,
+                    write_timeout=60
+                )
+            
+            # For images - use send_photo
+            elif file_type == 'image':
+                await self.telegram_bot.send_photo(
+                    chat_id=Config.TELEGRAM_CHANNEL_ID,
+                    photo=file_data,
+                    caption=caption[:1024] if caption else None,
+                    read_timeout=60,
+                    write_timeout=60
+                )
+            
+            # For documents (PDF, DOC, TXT, APK, EXE, ZIP, etc.) - use send_document
+            else:
+                await self.telegram_bot.send_document(
+                    chat_id=Config.TELEGRAM_CHANNEL_ID,
+                    document=file_data,
+                    filename=filename,
+                    caption=caption[:1024] if caption else None,
+                    read_timeout=60,
+                    write_timeout=60
+                )
+            
+            logger.info(f"✅ File sent to Telegram: {filename}")
             return True
             
         except TelegramError as e:
-            logger.error(f"❌ Telegram error: {e}")
+            logger.error(f"❌ Telegram error for {filename}: {e}")
             return False
         except Exception as e:
-            logger.error(f"❌ Unexpected error: {e}")
+            logger.error(f"❌ Unexpected error for {filename}: {e}")
             return False
     
     async def send_text_to_telegram(self, text: str):
@@ -132,30 +214,28 @@ class DiscordTelegramReposter:
             logger.error(f"❌ Unexpected error: {e}")
             return False
     
-    async def process_image_attachments(self, attachments) -> list:
-        """Process Discord image attachments"""
+    async def process_attachments(self, attachments) -> list:
+        """Process all Discord attachments"""
         results = []
         
         for attachment in attachments:
-            # Check if it's an image
-            is_image = False
-            if attachment.content_type:
-                is_image = attachment.content_type.startswith('image/')
-            else:
-                # Check by extension
-                image_extensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp']
-                is_image = any(attachment.filename.lower().endswith(ext) for ext in image_extensions)
+            logger.info(f"📎 Processing: {attachment.filename} ({attachment.size} bytes)")
             
-            if is_image:
-                logger.info(f"📸 Found image: {attachment.filename}")
-                image_data = await self.download_image(attachment.url)
-                if image_data:
-                    results.append(image_data)
+            # Download file
+            file_data = await self.download_file(attachment.url)
+            if file_data:
+                results.append({
+                    'data': file_data,
+                    'filename': attachment.filename,
+                    'content_type': attachment.content_type
+                })
+            else:
+                logger.warning(f"❌ Failed to process {attachment.filename}")
         
         return results
     
     async def on_discord_message(self, message):
-        """Handle Discord messages and repost to Telegram - CLEAN VERSION"""
+        """Handle Discord messages and repost to Telegram - FULL FILE SUPPORT"""
         
         # Ignore bot's own messages
         if message.author == self.discord_client.user:
@@ -171,25 +251,35 @@ class DiscordTelegramReposter:
             # Get the message content exactly as is (no extra formatting)
             message_text = message.content.strip() if message.content else ""
             
-            # Process image attachments
-            image_files = await self.process_image_attachments(message.attachments)
+            # Process ALL attachments (videos, images, files, etc.)
+            attachments_data = await self.process_attachments(message.attachments)
             
-            # Case 1: Message has images
-            if image_files:
-                # For each image, send with the message text as caption
-                for i, image_data in enumerate(image_files):
-                    # Send first image with full caption
+            # Case 1: Message has files/attachments
+            if attachments_data:
+                # Send first file with message text as caption
+                for i, attachment in enumerate(attachments_data):
                     if i == 0 and message_text:
-                        await self.send_image_to_telegram(image_data, message_text)
+                        # First file - send with caption
+                        await self.send_file_to_telegram(
+                            file_data=attachment['data'],
+                            filename=attachment['filename'],
+                            content_type=attachment['content_type'],
+                            caption=message_text
+                        )
                     else:
-                        # Additional images without caption
-                        await self.send_image_to_telegram(image_data, None)
+                        # Additional files - send without caption (or with file name)
+                        await self.send_file_to_telegram(
+                            file_data=attachment['data'],
+                            filename=attachment['filename'],
+                            content_type=attachment['content_type'],
+                            caption=None
+                        )
             
-            # Case 2: No images, just text
+            # Case 2: No files, just text
             elif message_text:
                 await self.send_text_to_telegram(message_text)
             
-            # Case 3: No content and no images
+            # Case 3: Empty message (shouldn't happen)
             else:
                 logger.warning("Empty message, nothing to send")
                 
