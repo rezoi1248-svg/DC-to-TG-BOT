@@ -6,6 +6,7 @@ import aiohttp
 from io import BytesIO
 import traceback
 import re
+from typing import Optional  # ← This was missing!
 
 from config import Config
 from logger import setup_logger
@@ -131,7 +132,7 @@ class DiscordTelegramReposter:
             logger.error(f"❌ Unexpected error: {e}")
             return False
     
-    async def process_image_attachments(self, attachments: list) -> list:
+    async def process_image_attachments(self, attachments) -> list:
         """Process Discord image attachments"""
         results = []
         
@@ -153,7 +154,7 @@ class DiscordTelegramReposter:
         
         return results
     
-    async def on_discord_message(self, message: discord.Message):
+    async def on_discord_message(self, message):
         """Handle Discord messages and repost to Telegram - CLEAN VERSION"""
         
         # Ignore bot's own messages
@@ -181,14 +182,14 @@ class DiscordTelegramReposter:
                     if i == 0 and message_text:
                         await self.send_image_to_telegram(image_data, message_text)
                     else:
-                        # Additional images without caption (or with "Image X" if needed)
+                        # Additional images without caption
                         await self.send_image_to_telegram(image_data, None)
             
             # Case 2: No images, just text
             elif message_text:
                 await self.send_text_to_telegram(message_text)
             
-            # Case 3: No content and no images (shouldn't happen often)
+            # Case 3: No content and no images
             else:
                 logger.warning("Empty message, nothing to send")
                 
